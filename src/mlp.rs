@@ -61,14 +61,10 @@ impl MLP {
         // Compute loss
         let (loss, mut gradient) = match self.loss_function {
             LossFunctionEnum::MSE => (
-                // prediction.mse_loss(target),
-                // prediction.mse_loss_derivative(target)
                 MSE::forward(prediction, target),
                 MSE::backward(prediction, target)
             ),
             LossFunctionEnum::CategoricalCrossEntropy => (
-                // prediction.categorical_cross_entropy(target),
-                // prediction.categorical_cross_entropy_derivative(target)
                 CategoricalCrossEntropy::forward(prediction, target),
                 CategoricalCrossEntropy::backward(prediction, target)
             ),
