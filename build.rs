@@ -4,6 +4,11 @@ use std::path::PathBuf;
 
 fn main() {
 
+    if env::var("CARGO_FEATURE_CUDA").is_err() {
+        println!("cargo:warning=CUDA feature not enabled; skipping CUDA build");
+        return;
+    }
+
     println!("cargo:rerun-if-changed=cuda/mat_mul_kernel.cu");
     println!("cargo:rerun-if-changed=cuda/cuBLAS_mat_mul_kernel.cu");
     

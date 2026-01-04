@@ -10,7 +10,7 @@ fn main() {
     let mat2 = Tensor::random_2d(K, N, 24);
 
     let res_cpu = mat1.mul(&mat2, ExecutionMode::Sequential);
-    let res = mat1.mul(&mat2, ExecutionMode::CuBLAS);
+    let res = mat1.mul(&mat2, ExecutionMode::SIMD);
 
     println!("{}", res_cpu == res);
 

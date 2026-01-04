@@ -1,11 +1,15 @@
-use std::arch::x86_64::{_mm256_add_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_setzero_ps, _mm256_storeu_ps};
-use std::sync::Arc;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::{
+    _mm256_add_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_setzero_ps, _mm256_storeu_ps,
+};
+
+#[cfg(feature = "cuda")]
+use crate::tensor::cuda_matmul::{cuda_mat_mul, cublas_mat_mul};
+
 use std::{thread, vec};
 use rand_pcg::Pcg64;
 use rand::distributions::{Distribution, Uniform};
 use crate::tensor::raw_ptr::RawPointerWrapper;
-
-use crate::tensor::cuda_matmul::{cuda_mat_mul, cublas_mat_mul};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {
@@ -152,107 +156,65 @@ impl Tensor {
         }
     }
 
-    // matmul
+    #[allow(dead_code)]
+    pub fn mul_seq(&self, matrix: &Tensor) -> Tensor {
 
-    pub fn mul_vec(&self, vector: &Tensor) -> Tensor {
-        let rows = self.rows();
-        let cols = self.cols();
-        let vec_cols = vector.cols();
-        assert_eq!(vec_cols, 1, "Expected vector to be rx1 instead of {}x{}", vector.rows(), vec_cols);
-        let mut res = vec![0.0 as f32; rows];
+        let c1 = self.cols();
+        let r1 = self.rows();
+        let c2 = matrix.cols();
+        let r2 = matrix.rows();
 
-        for i in 0..rows {
-            unsafe {
-                let mut total = 0.0 as f32;
-                let mut elem = _mm256_setzero_ps();
-                
-                let complete_chunks = cols / 8;
-                for j in 0..complete_chunks {
-                    let offset = j * 8;
-                    let a_vec = _mm256_loadu_ps(self.data.as_ptr().add(i*cols + offset));
-                    let b_vec = _mm256_loadu_ps(vector.data.as_ptr().add(offset));
-                    let prod = _mm256_mul_ps(a_vec, b_vec);                   
-                    elem = _mm256_add_ps(prod, elem);
+        assert_eq!(c1, r2, "Matrix dimensions don't match: {}x{} * {}x{}", r1, c1, r2, c2);
+
+        let mut result = vec![0.0; r1 * c2];
+
+        for i in 0..r1 {
+            for j in 0..c2 {
+                let mut sum = 0.0;
+                for k in 0..c1 {
+                    sum += self.data[i * c1 + k] * matrix.data[k * c2 + j];
                 }
-
-                let remaining = cols % 8;
-                if remaining > 0 {
-                    let offset = complete_chunks * 8;
-                    for j in 0..remaining {
-                        total += self.data[i*cols + offset + j] * vector.data[offset + j];
-                    }
-                }
-
-                let mut values = vec![0.0 as f32; 8];
-                _mm256_storeu_ps(values.as_mut_ptr(), elem);
-                total += values[0] + values[1] + values[2] + values[3] + 
-                        values[4] + values[5] + values[6] + values[7];
-
-                *res.as_mut_ptr().add(i) = total;
+                result[i * c2 + j] = sum;
             }
         }
-        Tensor::new(res, vec![rows, 1])
+        Tensor::new(result, vec![r1, c2])
     }
 
-    pub fn mul_vec_parallel(&self, vector: &Tensor, nb_threads: usize) -> Tensor {
-        let rows = self.rows();
-        let cols = self.cols();
+    #[allow(dead_code)]
+    pub fn mul_par(&self, matrix: &Tensor, nb_threads: usize) -> Tensor {
+        let c1 = self.cols();
+        let r1 = self.rows();
+        let c2 = matrix.cols();
+        let r2 = matrix.rows();
 
-        let mut res = vec![0.0 as f32; rows];
-        let raw_ptr = RawPointerWrapper {raw: res.as_mut_ptr()};
+        assert_eq!(c1, r2, "Matrix dimensions don't match: {}x{} * {}x{}", r1, c1, r2, c2);
 
-        let rows_per_thread = rows / nb_threads;
-
-        let self_data: Arc<Vec<f32>> = Arc::from(self.data.clone());
-        let vec_data: Arc<Vec<f32>> = Arc::from(vector.data.clone());
+        let mut result = vec![0.0; r1 * c2];
+        let chunk_size = r1 / nb_threads;
 
         let mut handles = vec![];
 
-        for i in 0..nb_threads {
-            
-            let start = i * rows_per_thread;
-            let mut end = start + rows_per_thread;
-            if i == nb_threads - 1 {
-                end = rows;
-            }
+        for t in 0..nb_threads {
+            let start = t * chunk_size;
+            let end = if t == nb_threads - 1 { r1 } else { start + chunk_size };
 
-            let self_data = Arc::clone(&self_data);
-            let vec_data = Arc::clone(&vec_data);
-            let raw_ptr = raw_ptr;
+            let raw_pointer = RawPointerWrapper {
+                raw: result.as_mut_ptr()
+            };
+
+            let a = self.data.clone();
+            let b = matrix.data.clone();
 
             let handle = thread::spawn(move || {
-
-                for k in start..end {
-                    unsafe {
-                        let mut total = 0.0 as f32;
-                        let mut elem = _mm256_setzero_ps();
-                        
-                        let complete_chunks = cols / 8;
-                        for j in 0..complete_chunks {
-                            let offset = j * 8;
-                            let a_vec = _mm256_loadu_ps(self_data.as_ptr().add(k * cols + offset));
-                            let b_vec = _mm256_loadu_ps(vec_data.as_ptr().add(offset));
-                            let prod = _mm256_mul_ps(a_vec, b_vec);                   
-                            elem = _mm256_add_ps(prod, elem);
+                for i in start..end {
+                    for j in 0..c2 {
+                        let mut sum = 0.0;
+                        for k in 0..c1 {
+                            sum += a[i * c1 + k] * b[k * c2 + j];
                         }
-
-                        let remaining = cols % 8;
-                        if remaining > 0 {
-                            let offset = complete_chunks * 8;
-                            for j in 0..remaining {
-                                total += self_data[k * cols + offset + j] * vec_data[offset + j];
-                            }
-                        }
-        
-                        let mut values = vec![0.0 as f32; 8];
-                        _mm256_storeu_ps(values.as_mut_ptr(), elem);
-                        total += values[0] + values[1] + values[2] + values[3] + 
-                                values[4] + values[5] + values[6] + values[7];
-        
-                        Tensor::modify_vector_chunk(k, total, raw_ptr);
+                        Tensor::modify_vector_chunk(i * c2 + j, sum, raw_pointer);
                     }
                 }
-
             });
             handles.push(handle);
         }
@@ -260,9 +222,11 @@ impl Tensor {
         for handle in handles {
             handle.join().unwrap();
         }
-        Tensor::new(res, vec![rows, 1])
+
+        Tensor::new(result, vec![r1, c2])
     }
 
+    #[cfg(target_arch = "x86_64")]
     pub fn mul_simd(&self, tensor: &Tensor) -> Tensor {
         let self_rows = self.rows();
         let self_cols = self.cols();
@@ -315,6 +279,7 @@ impl Tensor {
         Tensor::new(res, vec![self_rows, tensor_cols])
     }
 
+    #[cfg(target_arch = "x86_64")]
     pub fn mul_simd_parallel(&self, tensor: &Tensor, nb_threads: usize) -> Tensor {
 
         let mut flag = true;
@@ -414,80 +379,14 @@ impl Tensor {
 
     }
 
-    #[allow(dead_code)]
-    pub fn mul_seq(&self, matrix: &Tensor) -> Tensor {
-
-        let c1 = self.cols();
-        let r1 = self.rows();
-        let c2 = matrix.cols();
-        let r2 = matrix.rows();
-
-        assert_eq!(c1, r2, "Matrix dimensions don't match: {}x{} * {}x{}", r1, c1, r2, c2);
-
-        let mut result = vec![0.0; r1 * c2];
-
-        for i in 0..r1 {
-            for j in 0..c2 {
-                let mut sum = 0.0;
-                for k in 0..c1 {
-                    sum += self.data[i * c1 + k] * matrix.data[k * c2 + j];
-                }
-                result[i * c2 + j] = sum;
-            }
-        }
-        Tensor::new(result, vec![r1, c2])
-    }
-
-    #[allow(dead_code)]
-    pub fn mul_par(&self, matrix: &Tensor, nb_threads: usize) -> Tensor {
-        let c1 = self.cols();
-        let r1 = self.rows();
-        let c2 = matrix.cols();
-        let r2 = matrix.rows();
-
-        assert_eq!(c1, r2, "Matrix dimensions don't match: {}x{} * {}x{}", r1, c1, r2, c2);
-
-        let mut result = vec![0.0; r1 * c2];
-        let chunk_size = r1 / nb_threads;
-
-        let mut handles = vec![];
-
-        for t in 0..nb_threads {
-            let start = t * chunk_size;
-            let end = if t == nb_threads - 1 { r1 } else { start + chunk_size };
-
-            let raw_pointer = RawPointerWrapper {
-                raw: result.as_mut_ptr()
-            };
-
-            let a = self.data.clone();
-            let b = matrix.data.clone();
-
-            let handle = thread::spawn(move || {
-                for i in start..end {
-                    for j in 0..c2 {
-                        let mut sum = 0.0;
-                        for k in 0..c1 {
-                            sum += a[i * c1 + k] * b[k * c2 + j];
-                        }
-                        Tensor::modify_vector_chunk(i * c2 + j, sum, raw_pointer);
-                    }
-                }
-            });
-            handles.push(handle);
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        Tensor::new(result, vec![r1, c2])
-    }
-
+    #[cfg(feature = "cuda")]
+    #[warn(dead_code)]
     pub fn mul_cuda(&self, matrix: &Tensor) -> Tensor {
         cuda_mat_mul(self, matrix, self.rows(), self.cols(), matrix.cols())
     }
 
+    #[cfg(feature = "cuda")]
+    #[warn(dead_code)]
     pub fn mul_cublas(&self, matrix: &Tensor) -> Tensor {
         cublas_mat_mul(self, matrix, self.rows(), self.cols(), matrix.cols())
     }
@@ -496,14 +395,21 @@ impl Tensor {
         match execution_mode {
             ExecutionMode::Sequential => self.mul_seq(matrix),
             ExecutionMode::Parallel => self.mul_par(matrix, 6),
+
+            #[cfg(target_arch = "x86_64")]
             ExecutionMode::SIMD => self.mul_simd(matrix),
+            #[cfg(target_arch = "x86_64")]
             ExecutionMode::ParallelSIMD => self.mul_simd_parallel(matrix, 6),
+            
+            #[cfg(feature = "cuda")]
             ExecutionMode::Cuda => self.mul_cuda(matrix),
-            ExecutionMode::CuBLAS => self.mul_cublas(matrix)
+            #[cfg(feature = "cuda")]
+            ExecutionMode::CuBLAS => self.mul_cublas(matrix),
+        
+            _ => self.mul_seq(matrix),
+
         }
     }
-
-    // matmul
 
     pub fn argmax(&self) -> usize {
         assert_eq!(self.cols(), 1, "argmax only works on column vectors (rx1 tensors)");
@@ -518,7 +424,6 @@ impl Tensor {
         max_idx
     }
 
-    // Element wise multiplication (i saw that the element wise mulitplication is called hadamard multiplication hence the name :) )
     pub fn hadamard(&self, other: &Tensor) -> Tensor {
         assert_eq!(self.shape, other.shape, "Tensor hadamard: shape mismatch {:?} vs {:?}", self.shape, other.shape);
         
