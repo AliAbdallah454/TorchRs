@@ -17,7 +17,7 @@ pub struct MLP {
     pub layers: Vec<Layer>,
     pub execution_mode: ExecutionMode,
     pub learning_rate: f32,
-    pub loss_function: LossFunctionEnum 
+    pub loss_function: LossFunctionEnum
 }
 
 impl MLP {
@@ -124,6 +124,7 @@ impl MLP {
         self.forward(input)
     }
 }
+
 impl MLP {
     /// Save the entire MLP (weights, biases, architecture, hyperparameters) to a file
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {

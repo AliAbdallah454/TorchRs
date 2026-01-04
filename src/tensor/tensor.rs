@@ -79,7 +79,7 @@ impl Tensor {
     pub fn random(shape: Vec<usize>, seed: u64) -> Self {
         use rand::SeedableRng;
         let mut rng = Pcg64::seed_from_u64(seed);
-        // can be changed to be from -1.0 to 1.0 later
+
         let uniform = Uniform::new(0.0, 1.0);
         let size: usize = shape.iter().product();
         let data = (0..size)
@@ -91,7 +91,6 @@ impl Tensor {
 
     pub fn print(&self) {
         if self.rank() == 2 {
-            // Print as matrix
             for r in 0..self.rows() {
                 for c in 0..self.cols() {
                     print!("{:.5} ", self.data[(r * self.cols() + c) as usize]);
@@ -99,14 +98,9 @@ impl Tensor {
                 println!();
             }
         } else {
-            // Print as general tensor with shape
             println!("Tensor shape: {:?}", self.shape);
             println!("Data: {:?}", self.data);
         }
-    }
-
-    pub fn dims(&self) -> (usize, usize) {
-        (self.rows(), self.cols())
     }
 
     pub fn ones(shape: Vec<usize>) -> Tensor {
@@ -147,6 +141,27 @@ impl Tensor {
         let data = self.data.iter().map(|x| x * x).collect();
         Tensor::new(data, self.shape.clone())
     }
+
+    pub fn argmax(&self) -> usize {
+        assert_eq!(self.cols(), 1, "argmax only works on column vectors (rx1 tensors)");
+        let mut max_idx = 0;
+        let mut max_val = self.data[0];
+        for (i, &val) in self.data.iter().enumerate() {
+            if val > max_val {
+                max_val = val;
+                max_idx = i;
+            }
+        }
+        max_idx
+    }
+
+    pub fn hadamard(&self, other: &Tensor) -> Tensor {
+        assert_eq!(self.shape, other.shape, "Tensor hadamard: shape mismatch {:?} vs {:?}", self.shape, other.shape);
+        
+        let data = self.data.iter().zip(other.data.iter()).map(|(a, b)| a * b).collect();
+        Tensor::new(data, self.shape.clone())
+    }
+
 
     #[allow(dead_code)]
     fn modify_vector_chunk(index: usize, val: f32, vec_ptr: RawPointerWrapper) {
@@ -410,25 +425,4 @@ impl Tensor {
 
         }
     }
-
-    pub fn argmax(&self) -> usize {
-        assert_eq!(self.cols(), 1, "argmax only works on column vectors (rx1 tensors)");
-        let mut max_idx = 0;
-        let mut max_val = self.data[0];
-        for (i, &val) in self.data.iter().enumerate() {
-            if val > max_val {
-                max_val = val;
-                max_idx = i;
-            }
-        }
-        max_idx
-    }
-
-    pub fn hadamard(&self, other: &Tensor) -> Tensor {
-        assert_eq!(self.shape, other.shape, "Tensor hadamard: shape mismatch {:?} vs {:?}", self.shape, other.shape);
-        
-        let data = self.data.iter().zip(other.data.iter()).map(|(a, b)| a * b).collect();
-        Tensor::new(data, self.shape.clone())
-    }
-
 }

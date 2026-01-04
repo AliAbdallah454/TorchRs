@@ -6,8 +6,12 @@ fn main() {
     const K: usize = 32;
     const N: usize = 128;
 
+
+
     let mat1 = Tensor::random_2d(M, K, 42);
     let mat2 = Tensor::random_2d(K, N, 24);
+
+    println!("{:?}", mat2.shape()[0]);
 
     let res_cpu = mat1.mul(&mat2, ExecutionMode::Sequential);
     let res = mat1.mul(&mat2, ExecutionMode::SIMD);
